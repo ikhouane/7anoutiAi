@@ -13,6 +13,7 @@ _ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTED_BACKENDS = {"sqlite", "supabase"}
 _PLACEHOLDER_VALUES = {
     "",
+    "your_app_url_here",
     "your_supabase_url_here",
     "your_supabase_anon_key_here",
 }
@@ -57,6 +58,7 @@ def _read_setting(name: str, default: str = "") -> str:
 _load_local_env()
 
 DATABASE_BACKEND = _read_setting("DATABASE_BACKEND", "sqlite").lower()
+APP_URL = _read_setting("APP_URL", "http://localhost:8501").rstrip("/")
 SUPABASE_URL = _read_setting("SUPABASE_URL")
 SUPABASE_ANON_KEY = _read_setting("SUPABASE_ANON_KEY")
 
@@ -71,6 +73,7 @@ if DATABASE_BACKEND == "supabase":
     missing = [
         name
         for name, value in (
+            ("APP_URL", APP_URL),
             ("SUPABASE_URL", SUPABASE_URL),
             ("SUPABASE_ANON_KEY", SUPABASE_ANON_KEY),
         )

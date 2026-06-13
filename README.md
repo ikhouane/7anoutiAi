@@ -90,6 +90,7 @@ values in `.env`.
 
 ```text
 DATABASE_BACKEND=sqlite
+APP_URL=http://localhost:8501
 SUPABASE_URL=your_supabase_url_here
 SUPABASE_ANON_KEY=your_supabase_anon_key_here
 ```
@@ -97,6 +98,8 @@ SUPABASE_ANON_KEY=your_supabase_anon_key_here
 - `DATABASE_BACKEND` supports `sqlite` and `supabase`. SQLite provides the full
   local MVP; Supabase currently provides authentication, onboarding, product
   management, customer debt management, and restock management.
+- `APP_URL` is the URL users return to after confirming their email. Use
+  `http://localhost:8501` locally and the deployed Streamlit URL in production.
 - `SUPABASE_URL` is required only when `DATABASE_BACKEND=supabase`.
 - `SUPABASE_ANON_KEY` is required only when `DATABASE_BACKEND=supabase`.
 
@@ -118,6 +121,7 @@ data layer.
 
 ```text
 DATABASE_BACKEND=sqlite
+APP_URL=http://localhost:8501
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-public-anon-key
 ```
@@ -182,12 +186,21 @@ Add these values to the Streamlit Community Cloud secrets editor:
 
 ```toml
 DATABASE_BACKEND = "supabase"
+APP_URL = "https://your-app.streamlit.app"
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_ANON_KEY = "your-public-anon-key"
 ```
 
 Use the Supabase project URL and public anonymous key from the Supabase API
 settings. Never use a `service_role` key in Streamlit.
+
+In Supabase Dashboard, open **Authentication → URL Configuration** and set:
+
+- **Site URL:** the exact deployed Streamlit URL
+- **Redirect URLs:** the same deployed Streamlit URL
+
+This prevents confirmation emails from redirecting users to
+`http://localhost:3000`.
 
 Root-level Streamlit secrets are made available to the app as environment
 variables, which are read by `config.py`.

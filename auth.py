@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, MutableMapping
 
+from config import APP_URL
 from supabase_client import get_supabase_client
 
 
@@ -93,7 +94,11 @@ def signup(
 
     try:
         response = get_supabase_client().auth.sign_up(
-            {"email": clean_email, "password": password}
+            {
+                "email": clean_email,
+                "password": password,
+                "options": {"email_redirect_to": APP_URL},
+            }
         )
         return _store_auth_response(response, state)
     except ValueError:
