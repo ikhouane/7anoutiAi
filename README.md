@@ -191,6 +191,20 @@ SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_ANON_KEY = "your-public-anon-key"
 ```
 
+### Public demo without login
+
+To let anyone test the app without creating an account, use this Streamlit
+secret:
+
+```toml
+DATABASE_BACKEND = "sqlite"
+```
+
+The app automatically loads demo products, sales, debts, and restocks when the
+cloud database is empty. Public demo data is shared between visitors and may
+reset when Streamlit restarts the app, so it must not contain real customer
+information.
+
 Use the Supabase project URL and public anonymous key from the Supabase API
 settings. Never use a `service_role` key in Streamlit.
 

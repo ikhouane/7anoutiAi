@@ -40,6 +40,7 @@ from db_adapter import (
     record_sale,
     update_product,
 )
+from seed_data import seed_database
 
 
 st.set_page_config(
@@ -158,8 +159,16 @@ if DATABASE_BACKEND == "supabase":
     active_user_email = str(user["email"])
     active_shop_name = str(profile.get("shop_name") or "Unnamed shop")
 
-try:
+@st.cache_resource
+def prepare_database() -> bool:
     initialize_database()
+    if DATABASE_BACKEND == "sqlite" and get_products().empty:
+        seed_database()
+    return True
+
+
+try:
+    prepare_database()
 except RuntimeError as exc:
     st.error(f"Database startup failed. {exc}")
     st.stop()
@@ -171,6 +180,8 @@ with st.sidebar:
     if DATABASE_BACKEND == "supabase":
         st.caption(f"Logged-in user: {active_user_email}")
         st.caption(f"Current shop: {active_shop_name}")
+    else:
+        st.caption("Public demo: no account required")
     if database_health["ok"]:
         st.success("Database connected")
     else:
@@ -934,6 +945,10 @@ if DATABASE_BACKEND == "supabase":
 
 st.title("7anoutiAI")
 st.caption("Simple stock, sales, and restocking management for Moroccan hanouts")
+st.info(
+    "Public demo mode: changes are shared with other visitors and may reset. "
+    "Please use sample information only, not real customer names or phone numbers."
+)
 
 dashboard_tab, products_tab, sales_tab, debts_tab, restock_tab = st.tabs(
     ["Dashboard", "Products", "Sales", "Customer Debts", "Restock"]
