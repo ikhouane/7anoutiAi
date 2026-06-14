@@ -22,6 +22,11 @@ def _friendly_error(action: str, exc: Exception) -> RuntimeError:
         message = "An account with this email already exists."
     elif "password" in lowered and "characters" in lowered:
         message = "The password does not meet Supabase password requirements."
+    elif "row-level security" in lowered:
+        message = (
+            "Your shop could not be linked to your account. "
+            "Please try again or contact support."
+        )
     elif not message:
         message = "Supabase did not return an error message."
 
@@ -218,35 +223,22 @@ def create_shop_and_profile(
 
     client = get_authenticated_client(state)
     try:
-        shop_response = (
-            client.table("shops")
-            .insert({"name": clean_shop_name, "owner_id": user["id"]})
-            .execute()
-        )
-        if not shop_response.data:
-            raise RuntimeError("Supabase did not return the new shop.")
-
-        shop = shop_response.data[0]
-        profile_response = (
-            client.table("profiles")
-            .insert(
-                {
-                    "id": user["id"],
-                    "shop_id": shop["id"],
-                    "full_name": clean_full_name or None,
-                    "role": "owner",
-                }
+        response = client.rpc(
+            "onboard_shop",
+            {
+                "p_shop_name": clean_shop_name,
+                "p_full_name": clean_full_name or None,
+            },
+        ).execute()
+        if not response.data:
+            raise RuntimeError(
+                "Supabase did not return the new shop profile."
             )
-            .execute()
-        )
-        if not profile_response.data:
-            raise RuntimeError("Supabase did not return the new profile.")
     except ValueError:
         raise
     except Exception as exc:
         raise _friendly_error("Shop onboarding", exc) from exc
 
-    profile = profile_response.data[0]
-    profile["shop_name"] = shop["name"]
+    profile = response.data[0]
     state[PROFILE_SESSION_KEY] = profile
     return profile
