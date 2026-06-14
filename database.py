@@ -306,6 +306,112 @@ def record_sale(product_id: int, quantity: int, sale_date: date | str) -> dict[s
     return {"revenue": revenue, "profit": profit}
 
 
+def record_sales_batch(
+    items: list[dict[str, Any]],
+    sale_date: date | str,
+) -> dict[str, float | int]:
+    if not items:
+        raise ValueError("Add at least one product to the cart.")
+
+    consolidated: dict[int, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Each cart item must include a product and quantity.")
+        try:
+            raw_product_id = item["product_id"]
+            raw_quantity = item["quantity"]
+            product_id = int(raw_product_id)
+            quantity = int(raw_quantity)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "Each cart item must include a valid product and quantity."
+            ) from exc
+        if isinstance(raw_product_id, bool) or str(product_id) != str(raw_product_id):
+            raise ValueError("Cart product IDs must be whole numbers.")
+        if isinstance(raw_quantity, bool) or str(quantity) != str(raw_quantity):
+            raise ValueError("Cart quantities must be whole numbers.")
+        if product_id <= 0:
+            raise ValueError("Cart product IDs must be greater than zero.")
+        if quantity <= 0:
+            raise ValueError("Cart quantities must be greater than zero.")
+        consolidated[product_id] = consolidated.get(product_id, 0) + quantity
+
+    sale_date_text = sale_date.isoformat() if isinstance(sale_date, date) else str(sale_date)
+    prepared_lines: list[dict[str, Any]] = []
+
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+
+        # Validate the complete basket before inserting a sale or changing stock.
+        for product_id, quantity in consolidated.items():
+            product = connection.execute(
+                """
+                SELECT id, name, buy_price, sell_price, stock_quantity
+                FROM products
+                WHERE id = ?
+                """,
+                (product_id,),
+            ).fetchone()
+            if product is None:
+                raise ValueError(f"Product {product_id} was not found.")
+            if int(product["stock_quantity"]) < quantity:
+                raise ValueError(
+                    f'Insufficient stock for "{product["name"]}". '
+                    f'Only {product["stock_quantity"]} units are available.'
+                )
+
+            prepared_lines.append(
+                {
+                    "product_id": product_id,
+                    "product_name": str(product["name"]),
+                    "quantity": quantity,
+                    "revenue": round(float(product["sell_price"]) * quantity, 2),
+                    "profit": round(
+                        (
+                            float(product["sell_price"])
+                            - float(product["buy_price"])
+                        )
+                        * quantity,
+                        2,
+                    ),
+                }
+            )
+
+        for line in prepared_lines:
+            connection.execute(
+                """
+                INSERT INTO sales (
+                    product_id, product_name, quantity, sale_date, revenue, profit
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    line["product_id"],
+                    line["product_name"],
+                    line["quantity"],
+                    sale_date_text,
+                    line["revenue"],
+                    line["profit"],
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE products
+                SET stock_quantity = stock_quantity - ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (line["quantity"], line["product_id"]),
+            )
+
+    return {
+        "revenue": round(sum(float(line["revenue"]) for line in prepared_lines), 2),
+        "profit": round(sum(float(line["profit"]) for line in prepared_lines), 2),
+        "units": sum(int(line["quantity"]) for line in prepared_lines),
+        "lines": len(prepared_lines),
+    }
+
+
 def get_sales() -> pd.DataFrame:
     with get_connection() as connection:
         return pd.read_sql_query(

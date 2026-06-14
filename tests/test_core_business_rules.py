@@ -118,6 +118,84 @@ def test_sale_calculates_revenue_and_profit(sqlite_database):
     assert product["stock_quantity"] == 15
 
 
+def test_batch_sale_updates_all_products_and_totals(sqlite_database):
+    milk_id = sqlite_database.add_product("Milk", "Dairy", 5.0, 7.0, 10, 2)
+    bread_id = sqlite_database.add_product("Bread", "Bakery", 1.0, 2.0, 20, 4)
+
+    result = sqlite_database.record_sales_batch(
+        [
+            {"product_id": milk_id, "quantity": 2},
+            {"product_id": bread_id, "quantity": 3},
+        ],
+        date(2026, 6, 14),
+    )
+
+    assert result == {"revenue": 20.0, "profit": 7.0, "units": 5, "lines": 2}
+    assert sqlite_database.get_product(milk_id)["stock_quantity"] == 8
+    assert sqlite_database.get_product(bread_id)["stock_quantity"] == 17
+    assert len(sqlite_database.get_sales()) == 2
+
+
+def test_batch_sale_consolidates_repeated_products(sqlite_database):
+    product_id = sqlite_database.add_product(
+        "Water",
+        "Drinks",
+        2.0,
+        3.0,
+        10,
+        2,
+    )
+
+    result = sqlite_database.record_sales_batch(
+        [
+            {"product_id": product_id, "quantity": 1},
+            {"product_id": product_id, "quantity": 2},
+        ],
+        date(2026, 6, 14),
+    )
+
+    assert result == {"revenue": 9.0, "profit": 3.0, "units": 3, "lines": 1}
+    assert sqlite_database.get_product(product_id)["stock_quantity"] == 7
+    sales = sqlite_database.get_sales()
+    assert len(sales) == 1
+    assert int(sales.iloc[0]["quantity"]) == 3
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [],
+        [{"product_id": 1, "quantity": 0}],
+        [{"product_id": 1, "quantity": -1}],
+        [{"product_id": 1, "quantity": 1.5}],
+        [{"quantity": 1}],
+    ],
+)
+def test_batch_sale_rejects_empty_or_invalid_items(sqlite_database, items):
+    with pytest.raises(ValueError):
+        sqlite_database.record_sales_batch(items, date(2026, 6, 14))
+
+
+def test_batch_sale_rolls_back_when_one_product_has_insufficient_stock(
+    sqlite_database,
+):
+    milk_id = sqlite_database.add_product("Milk", "Dairy", 5.0, 7.0, 10, 2)
+    bread_id = sqlite_database.add_product("Bread", "Bakery", 1.0, 2.0, 1, 1)
+
+    with pytest.raises(ValueError, match='Insufficient stock for "Bread"'):
+        sqlite_database.record_sales_batch(
+            [
+                {"product_id": milk_id, "quantity": 2},
+                {"product_id": bread_id, "quantity": 2},
+            ],
+            date(2026, 6, 14),
+        )
+
+    assert sqlite_database.get_product(milk_id)["stock_quantity"] == 10
+    assert sqlite_database.get_product(bread_id)["stock_quantity"] == 1
+    assert sqlite_database.get_sales().empty
+
+
 def test_sqlite_health_check(sqlite_database):
     result = db_adapter.health_check()
 

@@ -425,6 +425,15 @@ def record_sale(
     raise _unsupported_supabase("Sales recording")
 
 
+def record_sales_batch(
+    items: list[dict[str, Any]],
+    sale_date: date | str,
+) -> dict[str, float | int]:
+    if DATABASE_BACKEND == "sqlite":
+        return sqlite_backend.record_sales_batch(items, sale_date)
+    raise _unsupported_supabase("Quick Sale")
+
+
 def get_sales(shop_id: str | None = None) -> pd.DataFrame:
     if DATABASE_BACKEND == "sqlite":
         return sqlite_backend.get_sales()

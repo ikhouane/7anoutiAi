@@ -38,6 +38,7 @@ from db_adapter import (
     record_customer_payment,
     record_restock,
     record_sale,
+    record_sales_batch,
     update_product,
 )
 from seed_data import seed_database
@@ -221,6 +222,313 @@ def download_csv(label: str, data: pd.DataFrame, filename: str, key: str) -> Non
         key=key,
         disabled=data.empty,
     )
+
+
+def quick_sale_products(products: pd.DataFrame, limit: int = 12) -> pd.DataFrame:
+    if products.empty:
+        return products
+
+    top_sellers = get_top_selling_products(limit=limit)
+    ranked_names = (
+        top_sellers["product_name"].astype(str).tolist()
+        if not top_sellers.empty
+        else []
+    )
+    rank = {name.casefold(): index for index, name in enumerate(ranked_names)}
+    ranked = products.copy()
+    ranked["_sales_rank"] = ranked["name"].astype(str).str.casefold().map(rank)
+    ranked["_is_unranked"] = ranked["_sales_rank"].isna()
+    ranked["_sales_rank"] = ranked["_sales_rank"].fillna(len(rank))
+    ranked = ranked.sort_values(
+        ["_is_unranked", "_sales_rank", "name"],
+        kind="stable",
+    )
+    return ranked.drop(columns=["_sales_rank", "_is_unranked"]).head(limit)
+
+
+def render_quick_sale_grid(
+    products: pd.DataFrame,
+    action_label: str,
+    key_prefix: str,
+) -> int | None:
+    clicked_product_id: int | None = None
+    columns = st.columns(2)
+    for index, (_, product) in enumerate(products.iterrows()):
+        product_id = int(product["id"])
+        stock = int(product["stock_quantity"])
+        with columns[index % 2]:
+            with st.container(border=True):
+                st.markdown(f"**{product['name']}**")
+                st.caption(
+                    f"{money(float(product['sell_price']))} · Stock: {stock}"
+                )
+                if st.button(
+                    action_label,
+                    key=f"{key_prefix}_{product_id}",
+                    disabled=stock <= 0,
+                    use_container_width=True,
+                ):
+                    clicked_product_id = product_id
+    return clicked_product_id
+
+
+def searchable_quick_sale_grid(
+    products: pd.DataFrame,
+    action_label: str,
+    key_prefix: str,
+) -> int | None:
+    search = st.text_input(
+        "Search all products",
+        placeholder="Type a product name or category",
+        key=f"{key_prefix}_search",
+    ).strip()
+    if search:
+        matches = products[
+            products["name"].astype(str).str.contains(search, case=False, na=False)
+            | products["category"].astype(str).str.contains(
+                search,
+                case=False,
+                na=False,
+            )
+        ].sort_values("name")
+        st.caption(f"{len(matches)} matching product(s)")
+        if matches.empty:
+            st.info("No products match that search.")
+            return None
+        return render_quick_sale_grid(matches, action_label, f"{key_prefix}_match")
+
+    st.caption("Popular products first")
+    return render_quick_sale_grid(
+        quick_sale_products(products),
+        action_label,
+        f"{key_prefix}_popular",
+    )
+
+
+def add_product_to_cart(product_id: int, products: pd.DataFrame) -> None:
+    product_rows = products.loc[products["id"] == product_id]
+    if product_rows.empty:
+        st.session_state["quick_sale_error"] = "That product is no longer available."
+        return
+
+    stock = int(product_rows.iloc[0]["stock_quantity"])
+    cart = dict(st.session_state.get("quick_sale_cart", {}))
+    current_quantity = int(cart.get(product_id, 0))
+    if current_quantity >= stock:
+        st.session_state["quick_sale_error"] = (
+            f'Only {stock} unit(s) of "{product_rows.iloc[0]["name"]}" are available.'
+        )
+        return
+    cart[product_id] = current_quantity + 1
+    st.session_state["quick_sale_cart"] = cart
+
+
+def show_quick_sale_cart(products: pd.DataFrame) -> None:
+    cart = dict(st.session_state.get("quick_sale_cart", {}))
+    product_lookup = {
+        int(row["id"]): row
+        for _, row in products.iterrows()
+    }
+    valid_cart = {
+        int(product_id): int(quantity)
+        for product_id, quantity in cart.items()
+        if int(product_id) in product_lookup and int(quantity) > 0
+    }
+    if valid_cart != cart:
+        st.session_state["quick_sale_cart"] = valid_cart
+    cart = valid_cart
+
+    st.markdown("#### Current cart")
+    if not cart:
+        st.info("Your cart is empty. Tap a product above to add it.")
+        return
+
+    total_units = 0
+    estimated_revenue = 0.0
+    estimated_profit = 0.0
+    for product_id, quantity in cart.items():
+        product = product_lookup[product_id]
+        stock = int(product["stock_quantity"])
+        sell_price = float(product["sell_price"])
+        buy_price = float(product["buy_price"])
+        subtotal = sell_price * quantity
+        total_units += quantity
+        estimated_revenue += subtotal
+        estimated_profit += (sell_price - buy_price) * quantity
+
+        with st.container(border=True):
+            st.markdown(f"**{product['name']}**")
+            st.caption(
+                f"{money(sell_price)} each · {money(subtotal)} subtotal · "
+                f"{stock} in stock"
+            )
+            decrease, quantity_column, increase, remove = st.columns([1, 1, 1, 2])
+            if decrease.button(
+                "−",
+                key=f"cart_decrease_{product_id}",
+                use_container_width=True,
+            ):
+                if quantity <= 1:
+                    cart.pop(product_id, None)
+                else:
+                    cart[product_id] = quantity - 1
+                st.session_state["quick_sale_cart"] = cart
+                st.rerun()
+            quantity_column.markdown(
+                f"<div style='text-align:center;padding-top:0.55rem'>"
+                f"<strong>{quantity}</strong></div>",
+                unsafe_allow_html=True,
+            )
+            if increase.button(
+                "+",
+                key=f"cart_increase_{product_id}",
+                disabled=quantity >= stock,
+                use_container_width=True,
+            ):
+                cart[product_id] = quantity + 1
+                st.session_state["quick_sale_cart"] = cart
+                st.rerun()
+            if remove.button(
+                "Remove",
+                key=f"cart_remove_{product_id}",
+                use_container_width=True,
+            ):
+                cart.pop(product_id, None)
+                st.session_state["quick_sale_cart"] = cart
+                st.rerun()
+
+    summary_columns = st.columns(3)
+    summary_columns[0].metric("Units", total_units)
+    summary_columns[1].metric("Revenue", money(estimated_revenue))
+    summary_columns[2].metric("Profit", money(estimated_profit))
+    cart_sale_date = st.date_input(
+        "Sale date",
+        value=date.today(),
+        key="quick_cart_sale_date",
+    )
+    clear_column, confirm_column = st.columns(2)
+    if clear_column.button(
+        "Clear cart",
+        key="quick_cart_clear",
+        use_container_width=True,
+    ):
+        st.session_state["quick_sale_cart"] = {}
+        st.rerun()
+    if confirm_column.button(
+        "Confirm sale",
+        key="quick_cart_confirm",
+        type="primary",
+        use_container_width=True,
+    ):
+        try:
+            result = record_sales_batch(
+                [
+                    {"product_id": product_id, "quantity": quantity}
+                    for product_id, quantity in cart.items()
+                ],
+                cart_sale_date,
+            )
+            st.session_state["quick_sale_cart"] = {}
+            st.session_state["quick_sale_notice"] = (
+                f"Cart sale recorded: {result['units']} units, "
+                f"{money(float(result['revenue']))} revenue, and "
+                f"{money(float(result['profit']))} profit."
+            )
+            st.rerun()
+        except (RuntimeError, ValueError) as exc:
+            st.error(str(exc))
+
+
+@st.dialog("Confirm instant sale")
+def show_instant_sale_dialog(product: pd.Series) -> None:
+    stock = int(product["stock_quantity"])
+    st.markdown(f"### {product['name']}")
+    st.write(f"Price: **{money(float(product['sell_price']))}**")
+    st.write(f"Available stock: **{stock}**")
+    st.write("Quantity: **1**")
+    st.caption("Use Cart Sale when you need more units or multiple products.")
+    cancel_column, confirm_column = st.columns(2)
+    if cancel_column.button(
+        "Cancel",
+        key="instant_sale_cancel",
+        use_container_width=True,
+    ):
+        st.session_state.pop("instant_sale_product_id", None)
+        st.rerun()
+    if confirm_column.button(
+        "Confirm sale",
+        key="instant_sale_confirm",
+        type="primary",
+        disabled=stock <= 0,
+        use_container_width=True,
+    ):
+        try:
+            result = record_sale(int(product["id"]), 1, date.today())
+            st.session_state.pop("instant_sale_product_id", None)
+            st.session_state["quick_sale_notice"] = (
+                f'Instant sale recorded for "{product["name"]}": '
+                f"{money(result['revenue'])} revenue and "
+                f"{money(result['profit'])} profit."
+            )
+            st.rerun()
+        except (RuntimeError, ValueError) as exc:
+            st.error(str(exc))
+
+
+def show_quick_sale(products: pd.DataFrame) -> None:
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] > button {
+            min-height: 2.75rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.subheader("Quick Sale")
+    st.caption("Tap products to record a sale with fewer steps.")
+    if notice := st.session_state.pop("quick_sale_notice", None):
+        st.success(notice)
+    if error := st.session_state.pop("quick_sale_error", None):
+        st.warning(error)
+
+    cart_tab, instant_tab = st.tabs(["Cart Sale", "Instant Sale"])
+    with cart_tab:
+        st.markdown("#### Add products")
+        selected_cart_product = searchable_quick_sale_grid(
+            products,
+            "Add to cart",
+            "quick_cart",
+        )
+        if selected_cart_product is not None:
+            add_product_to_cart(selected_cart_product, products)
+            st.rerun()
+        show_quick_sale_cart(products)
+
+    with instant_tab:
+        st.caption(
+            "Instant Sale records one unit after confirmation. "
+            "Use Cart Sale for larger orders."
+        )
+        selected_instant_product = searchable_quick_sale_grid(
+            products,
+            "Sell 1",
+            "quick_instant",
+        )
+        if selected_instant_product is not None:
+            st.session_state["instant_sale_product_id"] = selected_instant_product
+
+        pending_product_id = st.session_state.get("instant_sale_product_id")
+        if pending_product_id is not None:
+            pending_product = products.loc[
+                products["id"] == int(pending_product_id)
+            ]
+            if pending_product.empty:
+                st.session_state.pop("instant_sale_product_id", None)
+                st.warning("That product is no longer available.")
+            else:
+                show_instant_sale_dialog(pending_product.iloc[0])
 
 
 def show_supabase_product_management(shop_id: str) -> None:
@@ -1212,56 +1520,46 @@ with products_tab:
                 st.error(str(exc))
 
 with sales_tab:
-    st.subheader("Record sale")
     products = get_products()
     if products.empty:
-        st.info("Add a product before recording a sale.")
+        st.subheader("Quick Sale")
+        st.info("No products yet. Add your first product before recording a sale.")
     else:
+        show_quick_sale(products)
+
         sale_options = {
             f'{row["name"]} — {row["stock_quantity"]} in stock': int(row["id"])
             for _, row in products.iterrows()
         }
-        with st.form("record_sale_form", clear_on_submit=True):
-            sale_product_label = st.selectbox("Product", list(sale_options))
-            sale_quantity = st.number_input(
-                "Quantity sold", min_value=1, step=1, value=1
-            )
-            sale_date = st.date_input("Sale date", value=date.today())
-            sale_submitted = st.form_submit_button("Record sale", type="primary")
-
-        if sale_submitted:
-            try:
-                result = record_sale(
-                    sale_options[sale_product_label],
-                    int(sale_quantity),
-                    sale_date,
+        with st.expander("Manual sale entry", expanded=False):
+            st.caption("Fallback form for entering a specific quantity and date.")
+            with st.form("record_sale_form", clear_on_submit=True):
+                sale_product_label = st.selectbox("Product", list(sale_options))
+                sale_quantity = st.number_input(
+                    "Quantity sold", min_value=1, step=1, value=1
                 )
-                st.success(
-                    f"Sale recorded: {money(result['revenue'])} revenue and "
-                    f"{money(result['profit'])} profit."
+                sale_date = st.date_input("Sale date", value=date.today())
+                sale_submitted = st.form_submit_button(
+                    "Record sale",
+                    type="primary",
                 )
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
 
-    st.subheader("Sales history")
-    sales = get_sales()
-    show_table(
-        sales,
-        {
-            "product_name": "Product",
-            "quantity": "Quantity",
-            "sale_date": "Date",
-            "revenue": st.column_config.NumberColumn("Revenue", format="%.2f MAD"),
-            "profit": st.column_config.NumberColumn("Profit", format="%.2f MAD"),
-        },
-    )
-    download_csv(
-        "Download sales CSV",
-        sales,
-        "7anoutiai_sales.csv",
-        "download_sales",
-    )
+            if sale_submitted:
+                try:
+                    result = record_sale(
+                        sale_options[sale_product_label],
+                        int(sale_quantity),
+                        sale_date,
+                    )
+                    st.session_state["quick_sale_notice"] = (
+                        f"Sale recorded: {money(result['revenue'])} revenue and "
+                        f"{money(result['profit'])} profit."
+                    )
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
+    show_sales_history()
 
 with debts_tab:
     st.subheader("Customer debt notebook")
